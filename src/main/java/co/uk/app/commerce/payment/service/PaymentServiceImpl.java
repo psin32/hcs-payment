@@ -132,7 +132,7 @@ public class PaymentServiceImpl implements PaymentService {
 			createdPayment = payment.create(apiContext);
 
 			if (null != createdPayment) {
-				paypalResponse = convertPaypalResponse(createdPayment, paypalResponse);
+				paypalResponse = convertPaypalResponse(createdPayment);
 
 				PaymentDetails paymentDetails = paymentRepository.findByOrderId(orders.getOrdersId());
 
@@ -162,7 +162,7 @@ public class PaymentServiceImpl implements PaymentService {
 			payment = Payment.get(apiContext, paymentDetails.getPaypal().getId());
 
 			if (null != payment) {
-				paypalResponseBean = convertPaypalResponse(payment, paypalResponseBean);
+				paypalResponseBean = convertPaypalResponse(payment);
 
 				paymentDetails.setPaypal(paypalResponseBean);
 				paymentDetails.setStatus(PaymentStatus.CREATED);
@@ -206,7 +206,7 @@ public class PaymentServiceImpl implements PaymentService {
 			updatedPayment = payment.execute(apiContext, paymentExecution);
 
 			if (null != updatedPayment) {
-				paypalResponseBean = convertPaypalResponse(updatedPayment, paypalResponseBean);
+				paypalResponseBean = convertPaypalResponse(updatedPayment);
 
 				PaymentDetails paymentDetails = paymentRepository.findByOrderId(orders.getOrdersId());
 
@@ -292,9 +292,9 @@ public class PaymentServiceImpl implements PaymentService {
 		return shippingAddress;
 	}
 
-	private PaypalResponse convertPaypalResponse(Payment payment, PaypalResponse paypalResponseBean)
-			throws PaymentApplicationException {
+	private PaypalResponse convertPaypalResponse(Payment payment) throws PaymentApplicationException {
 		ObjectMapper mapper = new ObjectMapper();
+		PaypalResponse paypalResponseBean = new PaypalResponse();
 		try {
 			paypalResponseBean = mapper.readValue(payment.toJSON(), PaypalResponse.class);
 		} catch (JsonParseException e) {
@@ -429,11 +429,17 @@ public class PaymentServiceImpl implements PaymentService {
 					if (null != paymentDetails) {
 						paymentDetails.setPaymentType(PaymentType.GLOBALCOLLECT);
 						paymentDetails.setGlobalcollect(globalCollectPayment);
-						paymentDetails.setStatus(PaymentStatus.COMPLETED);
+						if (response.getCreatedPaymentOutput().getPayment().getStatus()
+								.equalsIgnoreCase("PENDING_APPROVAL")) {
+							paymentDetails.setStatus(PaymentStatus.COMPLETED);
+						} else {
+							paymentDetails.setStatus(PaymentStatus.FAILED);
+						}
 						paymentDetails.setPaypal(null);
 						paymentRepository.save(paymentDetails);
 
-						setGlobalCollectResponse(globalCollectResponseBean, globalCollectPayment);
+						setGlobalCollectResponse(globalCollectResponseBean, globalCollectPayment,
+								response.getCreatedPaymentOutput().getPayment().getStatus());
 					}
 
 					if (PaymentConstants.USER_TYPE_REGISTER.equalsIgnoreCase(registerType)) {
@@ -484,7 +490,7 @@ public class PaymentServiceImpl implements PaymentService {
 	}
 
 	private void setGlobalCollectResponse(GlobalCollectResponseBean globalCollectResponseBean,
-			GlobalCollectPayment globalCollectPayment) {
+			GlobalCollectPayment globalCollectPayment, String paymentResponseStatus) {
 		globalCollectResponseBean
 				.setHostedCheckoutId(globalCollectPayment.getCreateHostedCheckoutResponse().getHostedCheckoutId());
 		globalCollectResponseBean
@@ -509,7 +515,11 @@ public class PaymentServiceImpl implements PaymentService {
 		globalCollectResponseBean.setCurrency(globalCollectPayment.getGetHostedCheckoutResponse()
 				.getCreatedPaymentOutput().getPayment().getPaymentOutput().getAmountOfMoney().getCurrencyCode());
 
-		globalCollectResponseBean.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_PAYMENT_CREATED);
+		if (paymentResponseStatus.equalsIgnoreCase("PENDING_APPROVAL")) {
+			globalCollectResponseBean.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_PAYMENT_CREATED);
+		} else {
+			globalCollectResponseBean.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_PAYMENT_FAILED);
+		}
 	}
 
 	private Client getGlobalCollectClient() throws URISyntaxException {
