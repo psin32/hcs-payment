@@ -4,7 +4,11 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,10 +24,12 @@ import com.ingenico.connect.gateway.sdk.java.domain.definitions.AmountOfMoney;
 import com.ingenico.connect.gateway.sdk.java.domain.definitions.PaymentProductFilter;
 import com.ingenico.connect.gateway.sdk.java.domain.hostedcheckout.CreateHostedCheckoutRequest;
 import com.ingenico.connect.gateway.sdk.java.domain.hostedcheckout.CreateHostedCheckoutResponse;
+import com.ingenico.connect.gateway.sdk.java.domain.hostedcheckout.GetHostedCheckoutResponse;
 import com.ingenico.connect.gateway.sdk.java.domain.hostedcheckout.definitions.HostedCheckoutSpecificInput;
 import com.ingenico.connect.gateway.sdk.java.domain.hostedcheckout.definitions.PaymentProductFiltersHostedCheckout;
 import com.ingenico.connect.gateway.sdk.java.domain.payment.definitions.Customer;
 import com.ingenico.connect.gateway.sdk.java.domain.payment.definitions.Order;
+import com.ingenico.connect.gateway.sdk.java.domain.token.TokenResponse;
 import com.paypal.api.payments.Amount;
 import com.paypal.api.payments.Details;
 import com.paypal.api.payments.Item;
@@ -40,12 +46,15 @@ import com.paypal.base.rest.PayPalRESTException;
 
 import co.uk.app.commerce.payment.bean.Orders;
 import co.uk.app.commerce.payment.constant.PaymentConstants;
+import co.uk.app.commerce.payment.document.CardDetails;
 import co.uk.app.commerce.payment.document.PaymentDetails;
 import co.uk.app.commerce.payment.exception.PaymentApplicationException;
-import co.uk.app.commerce.payment.globalcollect.bean.GlobalCollectResponse;
+import co.uk.app.commerce.payment.globalcollect.bean.GlobalCollectPayment;
+import co.uk.app.commerce.payment.globalcollect.bean.GlobalCollectResponseBean;
 import co.uk.app.commerce.payment.paypal.bean.PaymentStatus;
 import co.uk.app.commerce.payment.paypal.bean.PaymentType;
 import co.uk.app.commerce.payment.paypal.bean.PaypalResponse;
+import co.uk.app.commerce.payment.repository.CardRepository;
 import co.uk.app.commerce.payment.repository.PaymentRepository;
 
 @Component
@@ -83,6 +92,9 @@ public class PaymentServiceImpl implements PaymentService {
 
 	@Autowired
 	private PaymentRepository paymentRepository;
+
+	@Autowired
+	private CardRepository cardRepository;
 
 	@Override
 	public PaypalResponse createPaypalPayment(Orders orders) throws PaymentApplicationException {
@@ -131,6 +143,7 @@ public class PaymentServiceImpl implements PaymentService {
 				}
 				paymentDetails.setPaypal(paypalResponse);
 				paymentDetails.setStatus(PaymentStatus.CREATED);
+				paymentDetails.setGlobalcollect(null);
 
 				paymentRepository.save(paymentDetails);
 			}
@@ -153,6 +166,7 @@ public class PaymentServiceImpl implements PaymentService {
 
 				paymentDetails.setPaypal(paypalResponseBean);
 				paymentDetails.setStatus(PaymentStatus.CREATED);
+				paymentDetails.setGlobalcollect(null);
 
 				paymentRepository.save(paymentDetails);
 			}
@@ -197,8 +211,10 @@ public class PaymentServiceImpl implements PaymentService {
 				PaymentDetails paymentDetails = paymentRepository.findByOrderId(orders.getOrdersId());
 
 				paymentDetails.setPaypal(paypalResponseBean);
+				paymentDetails.setGlobalcollect(null);
 
-				if (null != updatedPayment.getState() && updatedPayment.getState().equalsIgnoreCase("approved")) {
+				if (null != updatedPayment.getState()
+						&& updatedPayment.getState().equalsIgnoreCase(PaymentConstants.PAYMENT_STATUS_APPROVED)) {
 					paymentDetails.setStatus(PaymentStatus.COMPLETED);
 					paymentRepository.save(paymentDetails);
 				}
@@ -292,7 +308,7 @@ public class PaymentServiceImpl implements PaymentService {
 	}
 
 	@Override
-	public GlobalCollectResponse createGlobalCollectHostedPage(Orders orders) throws PaymentApplicationException {
+	public GlobalCollectResponseBean createGlobalCollectHostedPage(Orders orders) throws PaymentApplicationException {
 
 		// Card card = new Card();
 		// card.setCvv("123");
@@ -301,9 +317,225 @@ public class PaymentServiceImpl implements PaymentService {
 		// cardPaymentMethodSpecificInput.setCard(card);
 
 		HostedCheckoutSpecificInput hostedCheckoutSpecificInput = new HostedCheckoutSpecificInput();
+		PaymentProductFiltersHostedCheckout paymentProductFiltersHostedCheckout = new PaymentProductFiltersHostedCheckout();
+
+		CreateHostedCheckoutRequest body = generateCreateGlobalCollectRequest(orders, hostedCheckoutSpecificInput,
+				paymentProductFiltersHostedCheckout);
+
+		GlobalCollectResponseBean globalCollectResponseBean = new GlobalCollectResponseBean();
+		GlobalCollectPayment globalCollectPayment = new GlobalCollectPayment();
+		try {
+			CreateHostedCheckoutResponse response = getGlobalCollectClient().merchant(globalCollectMerchantId)
+					.hostedcheckouts().create(body);
+			globalCollectPayment.setCreateHostedCheckoutResponse(response);
+			globalCollectPayment.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_IN_PROGRESS);
+
+			PaymentDetails paymentDetails = paymentRepository.findByOrderId(orders.getOrdersId());
+
+			if (null == paymentDetails) {
+				paymentDetails = new PaymentDetails();
+			}
+			paymentDetails.setOrderId(orders.getOrdersId());
+			paymentDetails.setPaymentType(PaymentType.GLOBALCOLLECT);
+			paymentDetails.setGlobalcollect(globalCollectPayment);
+			paymentDetails.setStatus(PaymentStatus.CREATED);
+			paymentDetails.setPaypal(null);
+
+			paymentRepository.save(paymentDetails);
+
+			globalCollectResponseBean
+					.setHostedCheckoutId(globalCollectPayment.getCreateHostedCheckoutResponse().getHostedCheckoutId());
+			globalCollectResponseBean.setPartialRedirectUrl(
+					globalCollectPayment.getCreateHostedCheckoutResponse().getPartialRedirectUrl());
+			globalCollectResponseBean.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_IN_PROGRESS);
+
+		} catch (URISyntaxException e) {
+			throw new PaymentApplicationException(
+					"Exception occured while creating global collect hosted checkout page - ", e);
+		}
+		return globalCollectResponseBean;
+	}
+
+	@Override
+	public GlobalCollectResponseBean createGlobalCollectHostedPageForToken(Orders orders, String userId, String cardId)
+			throws PaymentApplicationException {
+
+		HostedCheckoutSpecificInput hostedCheckoutSpecificInput = new HostedCheckoutSpecificInput();
+		PaymentProductFiltersHostedCheckout paymentProductFiltersHostedCheckout = new PaymentProductFiltersHostedCheckout();
+
+		CardDetails cardDetails = cardRepository.findByUserIdAndCardId(userId, cardId);
+
+		if (null != cardDetails && null != cardDetails.getToken()) {
+			hostedCheckoutSpecificInput.setTokens(cardDetails.getToken());
+			paymentProductFiltersHostedCheckout.setTokensOnly(true);
+		}
+
+		CreateHostedCheckoutRequest body = generateCreateGlobalCollectRequest(orders, hostedCheckoutSpecificInput,
+				paymentProductFiltersHostedCheckout);
+
+		GlobalCollectResponseBean globalCollectResponseBean = new GlobalCollectResponseBean();
+		GlobalCollectPayment globalCollectPayment = new GlobalCollectPayment();
+		try {
+			CreateHostedCheckoutResponse response = getGlobalCollectClient().merchant(globalCollectMerchantId)
+					.hostedcheckouts().create(body);
+			globalCollectPayment.setCreateHostedCheckoutResponse(response);
+			globalCollectPayment.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_IN_PROGRESS);
+
+			PaymentDetails paymentDetails = paymentRepository.findByOrderId(orders.getOrdersId());
+
+			if (null == paymentDetails) {
+				paymentDetails = new PaymentDetails();
+			}
+			paymentDetails.setOrderId(orders.getOrdersId());
+			paymentDetails.setPaymentType(PaymentType.GLOBALCOLLECT);
+			paymentDetails.setGlobalcollect(globalCollectPayment);
+			paymentDetails.setStatus(PaymentStatus.CREATED);
+			paymentDetails.setPaypal(null);
+
+			paymentRepository.save(paymentDetails);
+
+			globalCollectResponseBean
+					.setHostedCheckoutId(globalCollectPayment.getCreateHostedCheckoutResponse().getHostedCheckoutId());
+			globalCollectResponseBean.setPartialRedirectUrl(
+					globalCollectPayment.getCreateHostedCheckoutResponse().getPartialRedirectUrl());
+			globalCollectResponseBean.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_IN_PROGRESS);
+
+		} catch (URISyntaxException e) {
+			throw new PaymentApplicationException(
+					"Exception occured while creating global collect hosted checkout page - ", e);
+		}
+		return globalCollectResponseBean;
+	}
+
+	@Override
+	public GlobalCollectResponseBean getGlobalCollectCheckoutStatus(String orderId, String hostedCheckoutId,
+			String userId, String registerType) throws PaymentApplicationException {
+		GlobalCollectResponseBean globalCollectResponseBean = new GlobalCollectResponseBean();
+		GlobalCollectPayment globalCollectPayment = new GlobalCollectPayment();
+		try {
+			GetHostedCheckoutResponse response = getGlobalCollectClient().merchant(globalCollectMerchantId)
+					.hostedcheckouts().get(hostedCheckoutId);
+
+			if (null != response) {
+				PaymentDetails paymentDetails = paymentRepository.findByOrderId(orderId);
+				globalCollectPayment = paymentDetails.getGlobalcollect();
+
+				globalCollectPayment.setGetHostedCheckoutResponse(response);
+				if (null != response.getStatus() && response.getStatus()
+						.equalsIgnoreCase(PaymentConstants.GLOBALCOLLECT_STATUS_PAYMENT_CREATED)) {
+
+					globalCollectPayment.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_PAYMENT_CREATED);
+
+					if (null != paymentDetails) {
+						paymentDetails.setPaymentType(PaymentType.GLOBALCOLLECT);
+						paymentDetails.setGlobalcollect(globalCollectPayment);
+						paymentDetails.setStatus(PaymentStatus.COMPLETED);
+						paymentDetails.setPaypal(null);
+						paymentRepository.save(paymentDetails);
+
+						setGlobalCollectResponse(globalCollectResponseBean, globalCollectPayment);
+					}
+
+					if (PaymentConstants.USER_TYPE_REGISTER.equalsIgnoreCase(registerType)) {
+						saveCard(userId, response);
+					}
+				} else {
+					globalCollectResponseBean.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_IN_PROGRESS);
+				}
+			}
+		} catch (URISyntaxException e) {
+			throw new PaymentApplicationException(
+					"Exception occured while getting global collect hosted checkout status - ", e);
+		}
+		return globalCollectResponseBean;
+	}
+
+	@Override
+	public Collection<CardDetails> getCardToken(String userId) {
+		return cardRepository.findByUserId(userId);
+	}
+
+	private void saveCard(String userId, GetHostedCheckoutResponse response) throws URISyntaxException {
+		String token = response.getCreatedPaymentOutput().getTokens();
+		if (null != token) {
+			TokenResponse tokenResponse = getGlobalCollectClient().merchant(globalCollectMerchantId).tokens()
+					.get(token);
+
+			if (null != tokenResponse) {
+				CardDetails cardDetails = cardRepository.findByUserIdAndToken(userId, token);
+
+				if (null == cardDetails) {
+					cardDetails = new CardDetails();
+					cardDetails.setCardId(UUID.randomUUID().toString());
+					cardDetails.setToken(token);
+					cardDetails.setUserId(userId);
+					cardDetails.setCardNumber(response.getCreatedPaymentOutput().getPayment().getPaymentOutput()
+							.getCardPaymentMethodSpecificOutput().getCard().getCardNumber());
+					cardDetails.setExpiryDate(response.getCreatedPaymentOutput().getPayment().getPaymentOutput()
+							.getCardPaymentMethodSpecificOutput().getCard().getExpiryDate());
+					cardDetails
+							.setCardType(getGlobalCollectCardMap().get(response.getCreatedPaymentOutput().getPayment()
+									.getPaymentOutput().getCardPaymentMethodSpecificOutput().getPaymentProductId()));
+
+					cardRepository.save(cardDetails);
+				}
+			}
+		}
+	}
+
+	private void setGlobalCollectResponse(GlobalCollectResponseBean globalCollectResponseBean,
+			GlobalCollectPayment globalCollectPayment) {
+		globalCollectResponseBean
+				.setHostedCheckoutId(globalCollectPayment.getCreateHostedCheckoutResponse().getHostedCheckoutId());
+		globalCollectResponseBean
+				.setPartialRedirectUrl(globalCollectPayment.getCreateHostedCheckoutResponse().getPartialRedirectUrl());
+
+		Long amount = globalCollectPayment.getGetHostedCheckoutResponse().getCreatedPaymentOutput().getPayment()
+				.getPaymentOutput().getAmountOfMoney().getAmount();
+		globalCollectResponseBean.setAmount(String.valueOf(Double.valueOf(amount) / 100));
+		globalCollectResponseBean.setPaymentMethod(globalCollectPayment.getGetHostedCheckoutResponse()
+				.getCreatedPaymentOutput().getPayment().getPaymentOutput().getPaymentMethod());
+
+		if (globalCollectPayment.getGetHostedCheckoutResponse().getCreatedPaymentOutput().getPayment()
+				.getPaymentOutput().getPaymentMethod().equalsIgnoreCase("card")) {
+			globalCollectResponseBean.setCardNumber(
+					globalCollectPayment.getGetHostedCheckoutResponse().getCreatedPaymentOutput().getPayment()
+							.getPaymentOutput().getCardPaymentMethodSpecificOutput().getCard().getCardNumber());
+			globalCollectResponseBean.setCardType(getGlobalCollectCardMap()
+					.get(globalCollectPayment.getGetHostedCheckoutResponse().getCreatedPaymentOutput().getPayment()
+							.getPaymentOutput().getCardPaymentMethodSpecificOutput().getPaymentProductId()));
+		}
+
+		globalCollectResponseBean.setCurrency(globalCollectPayment.getGetHostedCheckoutResponse()
+				.getCreatedPaymentOutput().getPayment().getPaymentOutput().getAmountOfMoney().getCurrencyCode());
+
+		globalCollectResponseBean.setStatus(PaymentConstants.GLOBALCOLLECT_STATUS_PAYMENT_CREATED);
+	}
+
+	private Client getGlobalCollectClient() throws URISyntaxException {
+		String apiKeyId = System.getProperty(PaymentConstants.GLOBALCOLLECT_CONNECT_API_APIKEYID, globalCollectApiKey);
+		String secretApiKey = System.getProperty(PaymentConstants.GLOBALCOLLECT_CONNECT_API_SECRETAPIKEY,
+				globalCollectSecretKey);
+
+		URL propertiesUrl = getClass().getResource(PaymentConstants.GLOBALCOLLECT_CONFIGURATION_FILE);
+		CommunicatorConfiguration configuration = Factory.createConfiguration(propertiesUrl.toURI(), apiKeyId,
+				secretApiKey);
+		return Factory.createClient(configuration);
+	}
+
+	private Map<Integer, String> getGlobalCollectCardMap() {
+		Map<Integer, String> map = new HashMap<>();
+		map.put(1, "Visa");
+		map.put(2, "American Express");
+		map.put(3, "MasterCard");
+		return map;
+	}
+
+	private CreateHostedCheckoutRequest generateCreateGlobalCollectRequest(Orders orders,
+			HostedCheckoutSpecificInput hostedCheckoutSpecificInput,
+			PaymentProductFiltersHostedCheckout paymentProductFiltersHostedCheckout) {
 		hostedCheckoutSpecificInput.setLocale(PaymentConstants.LOCALE_UK);
 		hostedCheckoutSpecificInput.setVariant(globalCollectVariantId);
-		PaymentProductFiltersHostedCheckout paymentProductFiltersHostedCheckout = new PaymentProductFiltersHostedCheckout();
 
 		List<Integer> products = new ArrayList<>();
 		products.add(1);
@@ -314,6 +546,7 @@ public class PaymentServiceImpl implements PaymentService {
 		paymentProductFilter.setProducts(products);
 
 		paymentProductFiltersHostedCheckout.setRestrictTo(paymentProductFilter);
+
 		hostedCheckoutSpecificInput.setPaymentProductFilters(paymentProductFiltersHostedCheckout);
 		hostedCheckoutSpecificInput.setShowResultPage(false);
 		hostedCheckoutSpecificInput.setReturnCancelState(true);
@@ -339,28 +572,6 @@ public class PaymentServiceImpl implements PaymentService {
 		CreateHostedCheckoutRequest body = new CreateHostedCheckoutRequest();
 		body.setHostedCheckoutSpecificInput(hostedCheckoutSpecificInput);
 		body.setOrder(order);
-
-		GlobalCollectResponse globalCollectResponse = new GlobalCollectResponse();
-		try {
-			CreateHostedCheckoutResponse response = getGlobalCollectClient().merchant(globalCollectMerchantId)
-					.hostedcheckouts().create(body);
-
-			ObjectMapper mapper = new ObjectMapper();
-			globalCollectResponse = mapper.readValue(mapper.writeValueAsString(response), GlobalCollectResponse.class);
-		} catch (URISyntaxException | IOException e) {
-			throw new PaymentApplicationException("Exception occured while setting up global collect client - ", e);
-		}
-		return globalCollectResponse;
-	}
-
-	private Client getGlobalCollectClient() throws URISyntaxException {
-		String apiKeyId = System.getProperty(PaymentConstants.GLOBALCOLLECT_CONNECT_API_APIKEYID, globalCollectApiKey);
-		String secretApiKey = System.getProperty(PaymentConstants.GLOBALCOLLECT_CONNECT_API_SECRETAPIKEY,
-				globalCollectSecretKey);
-
-		URL propertiesUrl = getClass().getResource(PaymentConstants.GLOBALCOLLECT_CONFIGURATION_FILE);
-		CommunicatorConfiguration configuration = Factory.createConfiguration(propertiesUrl.toURI(), apiKeyId,
-				secretApiKey);
-		return Factory.createClient(configuration);
+		return body;
 	}
 }

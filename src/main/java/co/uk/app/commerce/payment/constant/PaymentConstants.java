@@ -16,15 +16,17 @@ public interface PaymentConstants {
 
 	String PAYPAL_PAYMENT_INTENT = "sale";
 
-	String REQUEST_HEADER_GUEST_USER_ID = null;
+	String JWT_CLAIM_USER_ID = "userId";
 
-	Object JWT_CLAIM_USER_ID = null;
+	String JWT_CLAIM_ORIGINATED_BY = "originatedBy";
 
-	String REQUEST_HEADER_USER_ID = null;
+	String JWT_CLAIM_REGISTER_TYPE = "registertype";
 
-	String REQUEST_HEADER_REGISTER_TYPE = null;
+	String REQUEST_HEADER_USER_ID = "USER_ID";
 
-	Object JWT_CLAIM_REGISTER_TYPE = null;
+	String REQUEST_HEADER_ORIGINATED_BY = "ORIGINATED_BY";
+
+	String REQUEST_HEADER_REGISTER_TYPE = "REGISTER_TYPE";
 
 	String GLOBALCOLLECT_CONNECT_API_APIKEYID = "connect.api.apiKeyId";
 
@@ -33,5 +35,11 @@ public interface PaymentConstants {
 	String GLOBALCOLLECT_CONFIGURATION_FILE = "/global-collect.properties";
 
 	String LOCALE_UK = "en_GB";
+
+	String GLOBALCOLLECT_STATUS_IN_PROGRESS = "IN_PROGRESS";
+
+	String GLOBALCOLLECT_STATUS_PAYMENT_CREATED = "PAYMENT_CREATED";
+
+	String REQUEST_ORIGINATED_BY_ORDER_APPLICATION = "ORDER_APPLICATION";
 
 }

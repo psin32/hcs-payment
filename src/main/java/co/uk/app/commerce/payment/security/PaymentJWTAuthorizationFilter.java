@@ -61,8 +61,6 @@ public class PaymentJWTAuthorizationFilter extends BasicAuthenticationFilter {
 			securityConfiguration = webApplicationContext.getBean(PaymentSecurityConfiguration.class);
 		}
 
-		String guestToken = request.getHeader(securityConfiguration.getJwtGuestTokenHeader());
-
 		String token = null;
 
 		String authHeader = request.getHeader(securityConfiguration.getJwtHeader());
@@ -75,21 +73,13 @@ public class PaymentJWTAuthorizationFilter extends BasicAuthenticationFilter {
 
 			if (null != claims) {
 				String user = claims.getSubject();
-
-				// Setting up guest user id for merge order.
-				if (null != guestToken) {
-					Claims guestClaims = getClaims(guestToken);
-					if (null != guestClaims) {
-						request.setAttribute(PaymentConstants.REQUEST_HEADER_GUEST_USER_ID,
-								guestClaims.get(PaymentConstants.JWT_CLAIM_USER_ID));
-					}
-				}
-
 				if (user != null) {
 					request.setAttribute(PaymentConstants.REQUEST_HEADER_USER_ID,
 							claims.get(PaymentConstants.JWT_CLAIM_USER_ID));
 					request.setAttribute(PaymentConstants.REQUEST_HEADER_REGISTER_TYPE,
 							claims.get(PaymentConstants.JWT_CLAIM_REGISTER_TYPE));
+					request.setAttribute(PaymentConstants.REQUEST_HEADER_ORIGINATED_BY,
+							claims.get(PaymentConstants.JWT_CLAIM_ORIGINATED_BY));
 					return new UsernamePasswordAuthenticationToken(user, null, new ArrayList<>());
 				}
 			}

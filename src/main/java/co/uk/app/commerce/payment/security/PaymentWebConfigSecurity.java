@@ -17,7 +17,6 @@ public class PaymentWebConfigSecurity extends WebSecurityConfigurerAdapter {
 				.antMatchers("/swagger-resources/**").permitAll()
 				.antMatchers("/webjars/**").permitAll()
 				.antMatchers("/v2/api-docs").permitAll()
-				.antMatchers("/**").permitAll()
 				.anyRequest().authenticated().and()
 				.addFilter(new PaymentJWTAuthorizationFilter(authenticationManager()))
 				// this disables session creation on Spring Security

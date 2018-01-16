@@ -12,13 +12,21 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class GlobalCollectResponse {
+public class GlobalCollectResponseBean {
 
 	private String hostedCheckoutId;
 
-	private String invalidTokens;
-
 	private String partialRedirectUrl;
 
-	private String returnmac;
+	private String paymentMethod;
+
+	private String cardNumber;
+
+	private String cardType;
+
+	private String amount;
+
+	private String currency;
+
+	private String status;
 }
